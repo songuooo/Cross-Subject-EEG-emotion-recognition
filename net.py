@@ -2,7 +2,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import numpy as np
-from torch.utils.data import Dataset, DataLoader
+from torch.utils.data import Dataset, DataLoader, random_split
 import h5py
 
 class EEGDataset(Dataset):
@@ -119,11 +119,12 @@ class EEGConvNet(nn.Module):
         # 全连接层
         self.fc1 = nn.Linear(fc_input_size, 64)
         self.fc2 = nn.Linear(64, 32)
-        self.fc3 = nn.Linear(32, num_classes)
+        self.fc3 = nn.Linear(32, num_classes-1)
         
     def forward(self, x):
-        # 输入形状: (batch, 30, 250)
-        
+        # 输入形状: (batch, 250, 30)
+        x = x.permute(0,2,1)
+        # x.shape(b,30,250)
         # 添加通道维度: (batch, 1, 30, 250)
         x = x.unsqueeze(1)
         
@@ -157,8 +158,8 @@ class EEGConvNet(nn.Module):
         x = F.relu(self.fc2(x))
         x = self.dropout(x)
         
-        x = self.fc3(x)
-        
+        x = self.fc3(x)#self.fc3 = nn.Linear(32, num_classes-1)
+        # x=F.sigmoid(x)
         return x
     
 
