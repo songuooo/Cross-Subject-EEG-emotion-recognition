@@ -35,8 +35,7 @@ def train_epoch(model, loader, criterion, optimizer, device):
         # 前向传播
         optimizer.zero_grad()
         outputs = model(data)
-        targets = targets.unsqueeze(1).float()
-        loss = criterion(outputs, targets)
+        loss = criterion(outputs, targets.unsqueeze(1).float())
         
         # 反向传播
         loss.backward()
@@ -63,15 +62,14 @@ def validate(model, loader, criterion, device):
         for data, targets in loader:
             data, targets = data.to(device), targets.to(device)
             outputs = model(data)
-            targets = targets.unsqueeze(1).float()
-            loss = criterion(outputs, targets)
+            loss = criterion(outputs, targets.unsqueeze(1).float())
             
-            total_loss += loss.item() * data.size(0)
+            total_loss += loss.item()
             preds = (torch.sigmoid(outputs)>=0.5).long().squeeze(1)
             all_preds.extend(preds.cpu().numpy())
             all_labels.extend(targets.cpu().numpy())
     
-    avg_loss = total_loss / len(loader.dataset)
+    avg_loss = total_loss / len(loader)
     accuracy = accuracy_score(all_labels, all_preds)
     return avg_loss, accuracy
 
@@ -110,11 +108,11 @@ if __name__=="__main__":
     train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
     val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
     test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
-    
+     
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     model = EEGConvNet().to(device)
     criterion = nn.BCEWithLogitsLoss()
-    optimizer = optim.Adam(model.parameters(), lr=0.001)
+    optimizer = optim.Adam(model.parameters(), lr=0.0001)
     train(model,train_loader,val_loader,test_loader,criterion,optimizer,device,epochs=100)
     # print()
     # for 

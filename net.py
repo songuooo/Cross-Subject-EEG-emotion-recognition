@@ -76,91 +76,83 @@ class EEGConvNet(nn.Module):
     结合了空间和时间特征
     """
     
-    def __init__(self, input_channels=30, seq_len=250, num_classes=2):
+    def __init__(self, input_channels=30, seq_len=250, num_classes=1):
         super(EEGConvNet, self).__init__()
         
-        # 第一层：空间滤波器（处理通道间关系）
+        # 第一块：时间卷积 (kernel 沿时间维度)
+        # 输入: (batch, 1, channels, time)
+        # 输出: (batch, 8, channels, time)  因为 groups=1 默认，卷积核 (1,25) 只沿时间方向
+        self.temporal_conv = nn.Conv2d(
+            in_channels=1,
+            out_channels=8,
+            kernel_size=(1, 25),
+            padding=(0, 12),
+            bias=False
+        )
+        self.bn1 = nn.BatchNorm2d(8)
+        
+        # 第二块：空间卷积 (深度卷积，沿通道方向)
+        # 输入: (batch, 8, channels, time)
+        # kernel_size=(channels, 1) 会在空间维度上覆盖所有通道，groups=8 表示每个输入通道独立卷积
+        # 输出: (batch, 8, 1, time)
         self.spatial_conv = nn.Conv2d(
-            1,  # 输入通道数（将30个通道视为1个深度）
-            8,  # 输出通道数
-            kernel_size=(input_channels, 1),  # 卷积核覆盖所有通道
-            padding=0
+            in_channels=8,
+            out_channels=8,
+            kernel_size=(input_channels, 1),
+            groups=8,
+            bias=False
         )
+        self.bn2 = nn.BatchNorm2d(8)
         
-        # 第二层：时间滤波器
-        self.temporal_conv1 = nn.Conv1d(
-            8, 16,
-            kernel_size=5,
-            padding=2
+        # 第三块：可分离卷积 (先逐通道再逐点，这里用普通 Conv2d 模拟可分离效果)
+        # 输入: (batch, 8, 1, time)
+        # 输出: (batch, 16, 1, time)
+        self.sep_conv = nn.Conv2d(
+            in_channels=8,
+            out_channels=16,
+            kernel_size=(1, 10),
+            padding=(0, 4),
+            bias=False
         )
+        self.bn3 = nn.BatchNorm2d(16)
         
-        self.temporal_conv2 = nn.Conv1d(
-            16, 32,
-            kernel_size=5,
-            padding=2
-        )
+        # 全局平均池化，将时间维度压缩为 1
+        self.avgpool = nn.AdaptiveAvgPool2d((1, 1))   # 输出 (batch, 16, 1, 1)
         
-        # 批标准化
-        self.bn1 = nn.BatchNorm1d(8)
-        self.bn2 = nn.BatchNorm1d(16)
-        self.bn3 = nn.BatchNorm1d(32)
+        self.dropout = nn.Dropout(0.5)
         
-        # 池化
-        self.pool = nn.MaxPool1d(2)
-        
-        # Dropout
-        self.dropout = nn.Dropout(0.3)
-        
-        # 计算全连接层输入大小
-        # 空间卷积不改变时间维度
-        # 两次池化: 250 -> 125 -> 62
-        fc_input_size = 32 * 62
-        
-        # 全连接层
-        self.fc1 = nn.Linear(fc_input_size, 64)
-        self.fc2 = nn.Linear(64, 32)
-        self.fc3 = nn.Linear(32, num_classes-1)
+        # 分类层
+        self.classifier = nn.Linear(16, num_classes)   # num_classes=1 输出 logits
         
     def forward(self, x):
         # 输入形状: (batch, 250, 30)
-        x = x.permute(0,2,1)
-        # x.shape(b,30,250)
-        # 添加通道维度: (batch, 1, 30, 250)
-        x = x.unsqueeze(1)
+        # x shape: (batch, time, channels)  例如 (32, 250, 30)
+        # 转换为 (batch, 1, channels, time)
+        x = x.permute(0, 2, 1).unsqueeze(1)   # (batch, 1, channels, time)
         
-        # 空间卷积: 学习通道间的关系
-        x = self.spatial_conv(x)  # (batch, 8, 1, 250)
-        x = x.squeeze(2)  # (batch, 8, 250)
+        # 时间卷积 + BN + 激活
+        x = self.temporal_conv(x)
         x = self.bn1(x)
-        x = F.relu(x)
+        x = F.elu(x)      # EEGNet 常用 ELU
         
-        # 时间卷积1
-        x = self.temporal_conv1(x)  # (batch, 16, 250)
+        # 空间卷积 + BN + 激活
+        x = self.spatial_conv(x)
         x = self.bn2(x)
-        x = F.relu(x)
-        x = self.pool(x)  # (batch, 16, 125)
-        x = self.dropout(x)
+        x = F.elu(x)
         
-        # 时间卷积2
-        x = self.temporal_conv2(x)  # (batch, 32, 125)
+        # 可分离卷积 + BN + 激活
+        x = self.sep_conv(x)
         x = self.bn3(x)
-        x = F.relu(x)
-        x = self.pool(x)  # (batch, 32, 62)
+        x = F.elu(x)
+        
+        # 全局平均池化
+        x = self.avgpool(x)          # (batch, 16, 1, 1)
+        x = x.view(x.size(0), -1)    # (batch, 16)
+        
         x = self.dropout(x)
+        logits = self.classifier(x)  # (batch, 1)
         
-        # 展平
-        x = x.view(x.size(0), -1)  # (batch, 32 * 62)
-        
-        # 全连接层
-        x = F.relu(self.fc1(x))
-        x = self.dropout(x)
-        
-        x = F.relu(self.fc2(x))
-        x = self.dropout(x)
-        
-        x = self.fc3(x)#self.fc3 = nn.Linear(32, num_classes-1)
-        # x=F.sigmoid(x)
-        return x
+        return logits
     
 
 if __name__=="__main__":
